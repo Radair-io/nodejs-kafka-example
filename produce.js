@@ -1,43 +1,69 @@
-// import the `Kafka` instance from the kafkajs library
-const { Kafka } = require("kafkajs")
+/** @format */
 
-// the client ID lets kafka know who's producing the messages
-const clientId = "my-app"
-// we can define the list of brokers in the cluster
-const brokers = ["localhost:9093"]
-// this is the topic to which we want to write messages
-const topic = "raw-data-topic"
+const { Kafka } = require('kafkajs');
+const {
+  SchemaRegistry,
+  SchemaType,
+} = require('@kafkajs/confluent-schema-registry');
+const { generateTelemetry } = require('./test-data');
 
-// initialize a new kafka client and initialize a producer from it
-const kafka = new Kafka({ clientId, brokers })
-const producer = kafka.producer()
+const publishTestRecords = ({ topic }) => {
+  let interrupted = false;
 
-// we define an async function that writes a new message each second
-const produce = async () => {
-	await producer.connect()
-	let i = 0
+  const interrupt = () => {
+    interrupted = true;
+  };
 
-	// after the produce has connected, we start an interval timer
-	setInterval(async () => {
-		try {
-			// send a message to the configured topic with
-			// the key and value formed from the current value of `i`
-			await producer.send({
-				topic,
-				messages: [
-					{
-						key: String(i),
-						value: "Temperature: " + Math.floor((Math.random() * 35) + 1),
-					},
-				],
-			})
-			// if the message is written successfully, log it and increment `i`
-			console.log("writes: ", i)
-			i++
-		} catch (err) {
-			console.error("could not write message " + err)
-		}
-	}, 1000)
-}
+  process.on('SIGINT', interrupt);
+  process.on('SIGHUP', interrupt);
 
-module.exports = produce
+  const main = async () => {
+    // const registry = new SchemaRegistry({ host: "http://localhost:8081" });
+
+    // const { id } = await registry.register({
+    //   type: SchemaType.AVRO,
+    //   schema: JSON.stringify(schema),
+    // });
+
+    const kafka = new Kafka({
+      clientId: 'my-app',
+      brokers: ['localhost:9093'],
+    });
+
+    const producer = kafka.producer();
+
+    await producer.connect();
+    let i = 0;
+    while (!interrupted) {
+      const payload = generateTelemetry();
+      console.log(`publishing to ${topic}`, payload);
+      const encodedValue = JSON.stringify(payload);
+      await producer.send({
+        topic,
+        messages: [{ key: String(i), value: encodedValue }],
+      });
+      i++;
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5000));
+    }
+    await producer.disconnect();
+  };
+
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+};
+
+// const telemetrySchema = {
+//   type: "record",
+//   name: "Telemetry",
+//   namespace: "examples",
+//   fields: [
+//     { type: "string", name: "device" },
+//     { type: "int", name: "temperature" },
+//   ],
+// };
+
+publishTestRecords({
+  topic: 'telemetry',
+});

@@ -1,34 +1,38 @@
-const { Kafka, logLevel } = require("kafkajs")
+const { Kafka } = require("kafkajs");
+const { SchemaRegistry } = require("@kafkajs/confluent-schema-registry");
+const { insertTelemetry, closeDbConnections } = require("./db");
 
-const clientId = "my-app"
-const brokers = ["localhost:9093"]
-const topic = "raw-data-topic"
+const main = async () => {
+  // const registry = new SchemaRegistry({ host: "http://localhost:8081" });
 
-const kafka = new Kafka({
-	clientId,
-	brokers,
-	// logCreator: customLogger,
-	// logLevel: logLevel.DEBUG,
-})
+  const kafka = new Kafka({
+    clientId: "my-app",
+    brokers: ["localhost:9093"],
+  });
 
-// the kafka instance and configuration variables are the same as before
+  const consumer = kafka.consumer({ groupId: "test-telemetry" });
 
-// create a new consumer from the kafka client, and set its group ID
-// the group ID helps Kafka keep track of the messages that this client
-// is yet to receive
-const consumer = kafka.consumer({ groupId: clientId })
+  await consumer.connect();
+  await consumer.subscribe({ topic: "telemetry", fromBeginning: true });
 
-const consume = async () => {
-	// first, we wait for the client to connect and subscribe to the given topic
-	await consumer.connect()
-	await consumer.subscribe({ topic })
-	await consumer.run({
-		// this function is called every time the consumer gets a new message
-		eachMessage: ({ message }) => {
-			// here, we just log the message to the standard output
-			console.log(`Received message - ${message.value}`)
-		},
-	})
-}
+  const shutdown = async () => {
+    await consumer.disconnect();
+    await closeDbConnections();
+  };
 
-module.exports = consume
+  process.on("SIGINT", shutdown);
+  process.on("SIGHUP", shutdown);
+
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      const telemetry = JSON.parse(message.value);
+      await insertTelemetry(telemetry);
+      console.log(telemetry);
+    },
+  });
+};
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
